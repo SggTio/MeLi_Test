@@ -157,6 +157,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+```
 
 
 You should see canonical columns:
