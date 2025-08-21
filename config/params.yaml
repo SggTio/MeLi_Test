@@ -1,0 +1,68 @@
+# MercadoPago configuracion de pipeline
+# ubicacion config/params.yaml
+
+# ruta de los almacenes de datos (Arquitectura medallon)
+data_paths:
+  raw: "data/raw"           # capa bronce - datos crudos
+  processed: "data/processed"  # capa plata - limpios
+  output: "data/output"     # capa oro - listos para ML
+
+# Configuracion de procesamiento
+processing:
+  chunk_size: 10000         # records por chunk para manejo de memoria
+  max_memory_mb: 1024       # maximo uso de memoria en MB
+  target_window_days: 7     # semana por objetivo
+  lookback_window_days: 21  # 3 seanas para contexto
+  encoding: "utf-8"         # codificacion de archivos
+  validate_schema: true     # permitir validacion de esquemas con pandera para dfs
+  parallel_processing: false # permitir procesamiento en paralelo (cuando se necesite)
+  n_workers: 4              # trabajadores en paralelos
+
+# Configuracion de calidad de datos
+quality:
+  min_data_quality_score: 0.8    # threshold minimo de calidad aceptable de datos (0-1)
+  max_null_percentage: 0.1       # cantidad maxima de nulos en porcentaje (0-1)
+  max_duplicate_percentage: 0.1  # cantidad maxima de duplicados en porcentaje (0-1)
+  enable_quality_checks: true    # permitir quality checks
+  quality_report_path: "data/quality_reports"
+
+# configuracion de Logs
+logging:
+  level: "INFO"                  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  log_dir: "logs"
+  log_file: "pipeline.log"
+  max_file_size_mb: 10          # cantidad maxima de archivo de log antes de rotacion
+  backup_count: 5               # cantidad de backups
+  enable_console: true          # permitir consola
+
+# configuracion de ingenieria de caracteristicas
+features:
+  #  Ventanad de tiempo para calculo de caracteristicas
+  windows:
+    target: 7      # dias para variable objetivo
+    lookback: 21   # dias para caracteristicas historicas
+  
+  # tipos de caracteristicas a generar
+  generate:
+    interaction_counts: true    # conteos prints/taps/payments 
+    amount_aggregations: true   # caracteristicas de cantidad de pago
+    temporal_features: true     # caracteristicas de tiempo
+    user_behavior: true         # patrones de comportamiento de usuario
+
+# reglas de validacion de datos
+validation:
+  # reglas de negocio
+  business_rules:
+    max_payment_amount: 1000000  # limitacion de pago razonable heuristica de negocio
+    min_timestamp_days_ago: 730  # cantidad maxima de dias de pasado
+    
+  # checks consistencia de datos
+  consistency:
+    taps_must_have_prints: true     # toda tap tiene su print
+    payments_must_have_taps: true   # todo pago tiene su tap
+    
+  # thresholds de calidad
+  thresholds:
+    min_records_per_user: 1         # cantidad minima de registros por usuario
+    max_records_per_user: 10000     # cantidad de registros maxima por usuario (outlier detection)
