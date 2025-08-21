@@ -4,30 +4,40 @@ clase abstracta DataExtractor con validacion de tipos, schema enforcement,
 manejo de errores y manejo de memoria a traves de carga por chunks
 """
 
+#================================================================================
+
+from __future__ import annotations
+
 import json
-import pandas as pd
-import psutil
 import logging
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, Dict, Any, Optional, List, Union
-from datetime import datetime
-import sys
-import traceback
-from contextlib import contextmanager
+from typing import Iterator, List, Dict, Any, Optional, Type, Generic, TypeVar
 
-# Importar nuestros esquemas
-from ..models.schemas import (
-    PrintRecord, TapRecord, PaymentRecord, 
-    BatchProcessingResult, ProcessingMetadata
+import pandas as pd
+from pydantic import BaseModel, ValidationError
+
+from src.carrusel_mp.config import get_config
+from src.data.loaders import jsonl_chunks, csv_chunks
+from src.models.schemas import (
+    PrintRecord,
+    TapRecord,
+    PaymentRecord,
+    BatchProcessingResult,
 )
-from ..models.contracts import DataFrameContracts
+from src.models.contracts import validate_dataframe
+from mp_carousel.utils.time_utils import parse_day_date, ensure_datetime_utc
 
+T = TypeVar("T", bound=BaseModel)
+
+#================================================================================
 
 class DataExtractionError(Exception):
     """excepciones para errores de extracción"""
     pass
 
+#================================================================================
 
 class MemoryManager:
     """Utilidades para el manejo de memoria"""
@@ -38,10 +48,14 @@ class MemoryManager:
         process = psutil.Process()
         return process.memory_info().rss / 1024 / 1024
     
+    #--------------------------------------------------------------------------------
+    
     @staticmethod
     def get_available_memory_mb() -> float:
         """toma la memoria disponible en MB"""
         return psutil.virtual_memory().available / 1024 / 1024
+    
+    #--------------------------------------------------------------------------------
     
     @staticmethod
     def estimate_chunk_size(file_size_mb: float, max_memory_mb: float = 1024) -> int:
@@ -62,6 +76,7 @@ class MemoryManager:
         
         return max(min_chunk, min(chunk_size, max_chunk))
 
+#================================================================================
 
 class DataExtractor(ABC):
     """
@@ -122,21 +137,29 @@ class DataExtractor(ABC):
         }
         
         self.logger.info(f"Initialized {self.__class__.__name__} for file: {self.file_path}")
+
+    #--------------------------------------------------------------------------------
     
     @abstractmethod
     def get_pydantic_model(self):
         """retorna el modelo de pydantic"""
         pass
+
+    #--------------------------------------------------------------------------------
     
     @abstractmethod
     def get_schema_name(self) -> str:
         """Retorna el modelo de panderas"""
         pass
+
+    #--------------------------------------------------------------------------------
     
     @abstractmethod
     def _read_raw_chunk(self, chunk_start: int, chunk_size: int) -> List[Dict[str, Any]]:
         """lee el chunk crudo del archivo de datos"""
         pass
+
+    #--------------------------------------------------------------------------------
     
     def _validate_record(self, record_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
@@ -156,6 +179,8 @@ class DataExtractor(ABC):
                 'error_type': type(e).__name__
             })
             return None
+        
+    #--------------------------------------------------------------------------------
     
     def _validate_dataframe_schema(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -177,6 +202,8 @@ class DataExtractor(ABC):
         except Exception as e:
             self.logger.error(f"Esquema de validación fallido: {str(e)}")
             raise DataExtractionError(f"Schema validation failed: {str(e)}")
+        
+    #--------------------------------------------------------------------------------
     
     def _process_chunk(self, raw_records: List[Dict[str, Any]]) -> pd.DataFrame:
         """
@@ -227,6 +254,8 @@ class DataExtractor(ABC):
         
         return df
     
+    #--------------------------------------------------------------------------------
+    
     def _add_processing_metadata(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add processing metadata to DataFrame"""
         if df.empty:
@@ -240,6 +269,8 @@ class DataExtractor(ABC):
         df['data_quality_score'] = 1.0  # Base quality score, can be enhanced
         
         return df
+    
+    #--------------------------------------------------------------------------------
     
     @contextmanager
     def _memory_monitor(self):
@@ -257,6 +288,8 @@ class DataExtractor(ABC):
             
             if memory_diff > self.max_memory_mb * 0.8:
                 self.logger.warning(f"High memory usage detected: {memory_diff:.2f} MB")
+
+    #--------------------------------------------------------------------------------
     
     def extract_chunked(self) -> Iterator[pd.DataFrame]:
         """
@@ -311,6 +344,8 @@ class DataExtractor(ABC):
         finally:
             self.processing_metadata['end_time'] = datetime.utcnow()
             self._log_processing_summary()
+
+    #--------------------------------------------------------------------------------
     
     def extract_all(self) -> pd.DataFrame:
         """
@@ -361,6 +396,8 @@ class DataExtractor(ABC):
             self.logger.warning(f"Total errors encountered: {len(metadata['errors'])}")
             
         self.logger.info("=" * 60)
+
+    #--------------------------------------------------------------------------------
     
     def get_processing_result(self) -> BatchProcessingResult:
         """Get processing result as Pydantic model"""
@@ -386,6 +423,7 @@ class DataExtractor(ABC):
             errors=[str(error) for error in metadata['errors'][:10]]  # Limit to first 10 errors
         )
 
+#================================================================================
 
 class PrintsExtractor(DataExtractor):
     """Extractor for prints data (JSON Lines format)"""
@@ -393,8 +431,12 @@ class PrintsExtractor(DataExtractor):
     def get_pydantic_model(self):
         return PrintRecord
     
+    #--------------------------------------------------------------------------------
+    
     def get_schema_name(self) -> str:
         return "prints"
+    
+    #--------------------------------------------------------------------------------
     
     def _read_raw_chunk(self, chunk_start: int, chunk_size: int) -> List[Dict[str, Any]]:
         """Read chunk from JSON Lines file"""
@@ -429,6 +471,7 @@ class PrintsExtractor(DataExtractor):
         
         return records
 
+#================================================================================
 
 class TapsExtractor(DataExtractor):
     """Extractor for taps data (JSON Lines format)"""
@@ -436,8 +479,12 @@ class TapsExtractor(DataExtractor):
     def get_pydantic_model(self):
         return TapRecord
     
+    #--------------------------------------------------------------------------------
+    
     def get_schema_name(self) -> str:
         return "taps"
+    
+    #--------------------------------------------------------------------------------
     
     def _read_raw_chunk(self, chunk_start: int, chunk_size: int) -> List[Dict[str, Any]]:
         """Read chunk from JSON Lines file"""
@@ -472,6 +519,7 @@ class TapsExtractor(DataExtractor):
         
         return records
 
+#================================================================================
 
 class PaymentsExtractor(DataExtractor):
     """Extractor for payments data (CSV format)"""
@@ -479,8 +527,12 @@ class PaymentsExtractor(DataExtractor):
     def get_pydantic_model(self):
         return PaymentRecord
     
+    #--------------------------------------------------------------------------------
+    
     def get_schema_name(self) -> str:
         return "payments"
+    
+    #--------------------------------------------------------------------------------
     
     def _read_raw_chunk(self, chunk_start: int, chunk_size: int) -> List[Dict[str, Any]]:
         """Read chunk from CSV file"""
@@ -515,6 +567,8 @@ class PaymentsExtractor(DataExtractor):
             raise DataExtractionError(f"Error reading payments file: {str(e)}")
 
 
+#================================================================================
+
 # Factory function for creating extractors
 def create_extractor(file_path: Union[str, Path], 
                     data_type: str,
@@ -541,3 +595,5 @@ def create_extractor(file_path: Union[str, Path],
                         f"Available types: {list(extractors.keys())}")
     
     return extractors[data_type](file_path, **kwargs)
+
+#================================================================================
