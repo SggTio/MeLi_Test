@@ -55,7 +55,7 @@ validation:
   # reglas de negocio
   business_rules:
     max_payment_amount: 1000000  # limitacion de pago razonable heuristica de negocio
-    min_timestamp_days_ago: 730  # cantidad maxima de dias de pasado
+    min_timestamp_days_ago: 1825  # cantidad maxima de dias de pasado
     
   # checks consistencia de datos
   consistency:
