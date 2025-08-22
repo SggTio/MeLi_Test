@@ -18,16 +18,20 @@ def setup_logging() -> None:
     cfg = get_config().logging
     log_dir = Path(cfg.log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
+    detailed_fmt = getattr(cfg, "format", None) or "%(asctime)s | %(name)s | %(levelname)s | %(funcName)s:%(lineno)d | %(message)s"
+    simple_fmt = "%(levelname)s | %(name)s | %(message)s"
 
     logging_config = {
         "version": 1,
         "disable_existing_loggers": False,
         "formatters": {
             "detailed": {
-                "format": "%(asctime)s | %(name)s | %(levelname)s | %(funcName)s:%(lineno)d | %(message)s",
+                "format": detailed_fmt,
                 "datefmt": "%Y-%m-%d %H:%M:%S",
             },
-            "simple": {"format": "%(levelname)s | %(name)s | %(message)s"},
+            "simple": {
+                "format": simple_fmt,
+            },
         },
         "handlers": {
             "file": {
@@ -41,8 +45,15 @@ def setup_logging() -> None:
             }
         },
         "loggers": {
-            "mp_carousel": {"level": cfg.level, "handlers": ["file"], "propagate": False},
-            "root": {"level": cfg.level, "handlers": ["file"]},
+            "carrusel_mp": {
+                "level": cfg.level,
+                "handlers": ["file"],
+                "propagate": False,
+            },
+            "root": {
+                "level": cfg.level,
+                "handlers": ["file"],
+            },
         },
     }
 
@@ -58,7 +69,7 @@ def setup_logging() -> None:
 
     logging.config.dictConfig(logging_config)
     logger = logging.getLogger("mp_carousel.bootstrap")
-    logger.info("Logging initialized")
+    logger.info("Logging initialized (detailed formatter from cfg.format)")
 
 class ProgressTracker:
     def __init__(self, name: str, total_steps: Optional[int] = None) -> None:

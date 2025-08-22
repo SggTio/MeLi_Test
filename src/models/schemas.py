@@ -8,23 +8,24 @@ Pydantic schemas for data validation and consistency
 from __future__ import annotations
 from datetime import datetime, timezone, timedelta
 from typing import Optional
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 from src.carrusel_mp.config import get_config
+
+#================================================================================
+def _bounds() -> tuple[datetime, datetime]:
+    return get_config().get_validation_bounds()
 
 #================================================================================
 
 class BaseRecord(BaseModel):
     """Base record with common validation rules"""
 
-    model_config = {
-        "validate_assignment": True,
-        "use_enum_values": True,
-        "from_attributes": False,
-    }
-    
-    def _bounds() -> tuple[datetime, datetime]:
-        return get_config().get_validation_bounds()
+    model_config = ConfigDict(
+        validate_assignment=True,
+        use_enum_values=True,
+        from_attributes=False,
+    )
 
 #================================================================================
 
@@ -51,6 +52,8 @@ class PrintRecord(BaseRecord):
         lo, hi = _bounds()
         if v.tzinfo is None:
             v = v.replace(tzinfo=timezone.utc)
+        else:
+            v = v.astimezone(timezone.utc)
         if not (lo <= v <= hi):
             raise ValueError(f"timestamp out of bounds [{lo}..{hi}]")
         return v    
@@ -86,6 +89,8 @@ class PaymentRecord(BaseRecord):
         lo, hi = _bounds()
         if v.tzinfo is None:
             v = v.replace(tzinfo=timezone.utc)
+        else:
+            v = v.astimezone(timezone.utc)
         if not (lo <= v <= hi):
             raise ValueError(f"timestamp out of bounds [{lo}..{hi}]")
         return v

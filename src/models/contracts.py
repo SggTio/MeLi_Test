@@ -8,22 +8,28 @@ from __future__ import annotations
 import pandas as pd
 import pandera as pa
 from pandera import Column, Check, DataFrameSchema
-from datetime import datetime
 from src.carrusel_mp.config import get_config
 
 #================================================================================
 
-def _bounds():
-    return get_config().get_validation_bounds()
+_lo, _hi = get_config().get_validation_bounds()
+_max_amt = float(
+    get_config().get_param("validation.business_rules.max_payment_amount", 1_000_000)
+)
+
 # ---------- raw (canonical) schemas: strict=False ----------
 PrintsRawSchema = DataFrameSchema(
     {
-        "timestamp": Column(pa.DateTime, nullable=False, coerce=True,
-                            checks=[Check.greater_than_or_equal_to(lambda: _bounds()[0]),
-                                    Check.less_than_or_equal_to(lambda: _bounds()[1])]),
-        "user_id": Column(pa.String, nullable=False),
-        "value_prop_id": Column(pa.String, nullable=False),
-        "position": Column(pa.Int64, nullable=True),
+        "timestamp": Column(
+            pa.DateTime,
+            nullable=False,
+            coerce=True,
+            checks=[Check.ge(_lo), Check.le(_hi)],
+            description="UTC timestamp of print event",
+        ),
+        "user_id": Column(pa.String, nullable=False, description="User identifier"),
+        "value_prop_id": Column(pa.String, nullable=False, description="Value prop id"),
+        "position": Column(pa.Int64, nullable=True, description="Carousel position"),
     },
     coerce=True,
     strict=False,
@@ -32,12 +38,16 @@ PrintsRawSchema = DataFrameSchema(
 
 TapsRawSchema = DataFrameSchema(
     {
-        "timestamp": Column(pa.DateTime, nullable=False, coerce=True,
-                            checks=[Check.greater_than_or_equal_to(lambda: _bounds()[0]),
-                                    Check.less_than_or_equal_to(lambda: _bounds()[1])]),
-        "user_id": Column(pa.String, nullable=False),
-        "value_prop_id": Column(pa.String, nullable=False),
-        "position": Column(pa.Int64, nullable=True),
+        "timestamp": Column(
+            pa.DateTime,
+            nullable=False,
+            coerce=True,
+            checks=[Check.ge(_lo), Check.le(_hi)],
+            description="UTC timestamp of tap event",
+        ),
+        "user_id": Column(pa.String, nullable=False, description="User identifier"),
+        "value_prop_id": Column(pa.String, nullable=False, description="Value prop id"),
+        "position": Column(pa.Int64, nullable=True, description="Carousel position"),
     },
     coerce=True,
     strict=False,
@@ -46,14 +56,21 @@ TapsRawSchema = DataFrameSchema(
 
 PaymentsRawSchema = DataFrameSchema(
     {
-        "timestamp": Column(pa.DateTime, nullable=False, coerce=True,
-                            checks=[Check.greater_than_or_equal_to(lambda: _bounds()[0]),
-                                    Check.less_than_or_equal_to(lambda: _bounds()[1])]),
-        "user_id": Column(pa.String, nullable=False),
-        "value_prop_id": Column(pa.String, nullable=False),
-        "amount": Column(pa.Float, nullable=False, checks=[Check.gt(0), Check.le(
-            lambda: float(get_config().get_param("validation.business_rules.max_payment_amount", 1_000_000))
-        )]),
+        "timestamp": Column(
+            pa.DateTime,
+            nullable=False,
+            coerce=True,
+            checks=[Check.ge(_lo), Check.le(_hi)],
+            description="UTC timestamp of payment",
+        ),
+        "user_id": Column(pa.String, nullable=False, description="User identifier"),
+        "value_prop_id": Column(pa.String, nullable=False, description="Value prop id"),
+        "amount": Column(
+            pa.Float,
+            nullable=False,
+            checks=[Check.gt(0), Check.le(_max_amt)],
+            description="Payment amount",
+        ),
     },
     coerce=True,
     strict=False,
@@ -63,7 +80,7 @@ PaymentsRawSchema = DataFrameSchema(
 # ---------- processed/final schemas: strict=True ----------
 ProcessedPrintsSchema = DataFrameSchema(
     {
-        **PrintsRawSchema.columns,
+        **PrintsRawSchema.columns,  # reuse canonical columns
         "processed_at": Column(pa.DateTime, nullable=False),
         "source_file": Column(pa.String, nullable=False),
         "row_number": Column(pa.Int64, nullable=True),
@@ -91,19 +108,27 @@ FinalDatasetSchema = DataFrameSchema(
     name="final_dataset",
 )
 
-# ---------- helper ----------
-def get_schema_by_name(name: str) -> DataFrameSchema:
-    m = {
+
+# ---------- helper API compatible with extractors ----------
+class DataFrameContracts:
+    """Static accessors to schemas and validation, used by extractors."""
+
+    _SCHEMAS: Dict[str, DataFrameSchema] = {
         "prints_raw": PrintsRawSchema,
         "taps_raw": TapsRawSchema,
         "payments_raw": PaymentsRawSchema,
         "processed_prints": ProcessedPrintsSchema,
         "final_dataset": FinalDatasetSchema,
     }
-    if name not in m:
-        raise ValueError(f"Unknown schema: {name}")
-    return m[name]
 
-def validate_dataframe(df: pd.DataFrame, schema_name: str) -> None:
-    schema = get_schema_by_name(schema_name)
-    schema.validate(df, lazy=True)
+    @staticmethod
+    def get_schema_by_name(name: str) -> DataFrameSchema:
+        try:
+            return DataFrameContracts._SCHEMAS[name]
+        except KeyError as e:
+            raise ValueError(f"Unknown schema: {name}") from e
+
+    @staticmethod
+    def validate_dataframe(df: pd.DataFrame, schema_name: str) -> None:
+        schema = DataFrameContracts.get_schema_by_name(schema_name)
+        schema.validate(df, lazy=True)

@@ -1,217 +1,176 @@
-# MercadoPago ML Pipeline (Carousel Value Props)
+MercadoPago ML Pipeline
 
-Pipeline to build a training-ready dataset for ordering Value Props in MercadoPago’s “Descubrí Más” carousel.  
-This repo is organized in layers and follows a medallion architecture: **raw → processed → output**.
+Goal: build a machine learning–ready dataset for ordering Value Propositions (a.k.a. Value Props) shown in MercadoPago’s “Descubrí Más” carousel.
 
----
+The pipeline ingests prints, taps, and payments (JSONL/CSV), validates them with Pydantic (row-level) and Pandera (DataFrame-level), applies quality checks, and emits datasets ready for feature engineering.
 
-## Objectives (Phase 1 — implemented)
-
-- Read **raw events** from three sources:
-  - `prints.jsonl` (impressions),
-  - `taps.jsonl` (clicks),
-  - `pays.csv` (payments).
-- Stream them **in chunks** (memory-safe) and **normalize** to a canonical schema.
-- Validate each record with **Pydantic** (row-level) and each chunk with **Pandera** (dataframe-level).
-- Emit **manifests** and **rejects** for transparency.
-
-> Next phases (not in this README yet): preprocessing engine (UTC confirm, dedupe, metadata, dtypes), feature engineering (21-day lookback, label attribution), and orchestration.
-
----
-
-## Repository layout (relevant parts)
+📂 Repository Structure
 
 mercadopago-ml-pipeline/
 ├── config/
-│ └── params.yaml
-├── data/
-│ ├── raw/ # bronze
-│ ├── processed/ # silver
-│ └── output/ # gold
-├── docs/
-│ └── README.md
-└── src/
-└── mp_carousel/
-├── config.py # Single source of truth config
-├── logging_config.py # Logging setup + ProgressTracker
-├── models/
-│ ├── schemas.py # Pydantic row models (+ _bounds())
-│ └── contracts.py # Pandera DataFrame schemas
-├── data/
-│ ├── loaders.py # Chunk readers (csv/jsonl)
-│ ├── extractors.py # DataExtractor ABC + concrete extractors
-│ └── validators.py # Soft dataset-level checks (e.g. taps-have-prints rate)
-└── utils/
-├── time_utils.py # UTC helpers, parse_day_date
-└── quality_utils.py # Quality summaries
+│   └── params.yaml             # Central configuration (paths, windows, thresholds)
+├── management/
+│   └── logging_config.py       # Logging bootstrap & ProgressTracker
+├── src/
+│   └── carrusel_mp/
+│       └── config.py           # Config loader, env overrides, validation bounds
+│
+│   └── data/
+│       ├── extractors.py       # DataExtractor base + Prints/Taps/Payments
+│       ├── loaders.py          # JSONL/CSV chunked readers
+│       └── validators.py       # Cross-source validators (e.g. taps must have prints)
+│
+│   └── models/
+│       ├── contracts.py        # Pandera schemas (raw, processed, final)
+│       └── schemas.py          # Pydantic models (Print, Tap, Payment, Results)
+│
+└── data/                       # Storage (gitignored in real usage)
+    ├── raw/                    # Bronze: raw inputs
+    ├── processed/              # Silver: cleaned with metadata
+    └── output/                 # Gold: ML-ready dataset
 
+🔑 Core Components
+1. Configuration (config/params.yaml + src/carrusel_mp/config.py)
 
----
+params.yaml defines paths, chunk sizes, memory caps, validation windows, thresholds.
 
-## Configuration
+Config dataclass loader:
 
-**`config/params.yaml`** is the primary configuration. Key entries:
+Reads YAML and applies environment variable overrides.
 
-- `data_paths.raw|processed|output`  
-- `processing.chunk_size`, `processing.validate_schema`  
-- `validation.business_rules.min_timestamp_days_ago` ← **controls allowable data recency**  
-- `validation.business_rules.max_payment_amount`  
+Provides validation bounds (e.g., timestamp age in days).
 
-These values are also partially overrideable via environment variables (see `src/mp_carousel/config.py`).
+Ensures required directories exist.
 
----
+2. Logging (management/logging_config.py)
 
-## Canonical schemas
+Uses logging.config.dictConfig for structured logs.
 
-Raw sources are normalized to:
+File rotation with size/backup limits.
 
-- **Prints / Taps**:
-  - `timestamp: datetime (UTC)` ← from raw `day`
-  - `user_id: str`              ← cast from raw
-  - `value_prop_id: str`        ← from `event_data.value_prop`
-  - `position: Optional[int]`   ← from `event_data.position`
+Console logging toggle.
 
-- **Payments**:
-  - `timestamp: datetime (UTC)` ← from raw `pay_date`
-  - `user_id: str`              ← cast from raw
-  - `value_prop_id: str`        ← from `value_prop`
-  - `amount: float`             ← from `total` (must be > 0 and ≤ max_payment_amount)
+ProgressTracker for stepwise reporting:
+ 
+ ``` yaml
+🚀 start: extraction
+📈 [2/5] (40.0%) processed taps
+✅ done: extraction (duration: 12.34s)
+```
 
-**Why canonicalization?** The downstream pipeline (preprocessing, features, orchestrator) consumes a stable schema regardless of differences in raw formats.
+3. Models
 
----
+Pydantic Schemas (schemas.py)
 
-## Validation strategy
+Validate each row (PrintRecord, TapRecord, PaymentRecord).
 
-- **Pydantic (row-level)** — `src/mp_carousel/models/schemas.py`  
-  Each normalized row is validated by a Pydantic model (`PrintRecord`, `TapRecord`, `PaymentRecord`).  
-  Timestamp bounds are **config-driven**, read from `params.yaml` via `get_config().get_validation_bounds()`.
+Enforce ID formats, timestamp bounds (UTC), amount limits.
 
-- **Pandera (dataframe-level)** — `src/mp_carousel/models/contracts.py`  
-  For raw canonical chunks: `strict=False` (accepts extra columns).  
-  For processed/final datasets: `strict=True` (exact contract).
+Pandera Contracts (contracts.py)
 
----
+Validate entire DataFrames.
 
-## Extraction pipeline (current)
+strict=False for raw (allow optional cols like position).
 
-**Class:** `DataExtractor` in `src/mp_carousel/data/extractors.py`  
-**Pattern:** Template Method
+strict=True for processed/final (lock schema).
 
-Steps per chunk:
-1. `_reader()` yields a raw Pandas DataFrame from source (JSONL or CSV) using iterator-based chunking.
-2. `_normalize_chunk(df)` maps raw fields to canonical dicts.
-3. **Pydantic** validates each dict (quarantine if invalid).
-4. **Pandera** validates the resulting DataFrame (raw schema).
-5. Metrics updated; chunk yielded to the caller.
+Capture business rules (e.g., taps ≤ prints, payments ≤ max).
 
-On stream completion:
-- Writes a per-source **manifest** to `data/processed/_manifests/<source>.json`.
-- Appends invalid rows to `data/processed/_rejects/<source>.csv`.
-- Hard-fails if reject rate exceeds `max_reject_rate` (default 2%).
+4. Data Extractors (extractors.py)
 
----
+Abstract DataExtractor:
 
-## Logging & Progress
+Generic over Pydantic model + Pandera schema.
 
-`src/mp_carousel/logging_config.py` configures file + console logging and a `ProgressTracker` with corrected timing (`datetime.now(timezone.utc)`).
+Reads chunked data (via loaders.py).
 
-Log output shows:
-- per-chunk read/valid/rejected counts,
-- memory-friendly chunk boundaries,
-- end-of-source summaries.
+Normalizes raw JSON/CSV into canonical form:
 
----
+timestamp (UTC, parsed from day / pay_date).
 
-## Quick start (extraction only)
+user_id, value_prop_id.
 
-Place raw files:
+position (prints/taps) or amount (payments).
 
-data/raw/prints.json
-data/raw/taps.json
-data/raw/pays.csv
+Rejects invalid rows → quarantine CSV.
 
+Writes manifest JSON with metrics (rows read, rejected, etc.).
 
-Run a simple smoke script:
+Concrete extractors:
 
-```python
-from mp_carousel.logging_config import setup_logging
-from mp_carousel.config import get_config
-from mp_carousel.data.extractors import PrintsExtractor, TapsExtractor, PaymentsExtractor
+PrintsExtractor → JSONL with event_data.
 
-def main():
-    setup_logging()
-    cfg = get_config()
-    paths = {
-        "prints": f"{cfg.data_paths.raw}/prints.json",
-        "taps": f"{cfg.data_paths.raw}/taps.json",
-        "payments": f"{cfg.data_paths.raw}/pays.csv",
-    }
-    prints = PrintsExtractor(paths["prints"]).extract_all()
-    taps   = TapsExtractor(paths["taps"]).extract_all()
-    pays   = PaymentsExtractor(paths["payments"]).extract_all()
+TapsExtractor → JSONL with event_data.
 
-    print("prints sample:\n", prints.head())
-    print("taps sample:\n", taps.head())
-    print("pays sample:\n", pays.head())
+PaymentsExtractor → CSV with pay_date, total.
 
-if __name__ == "__main__":
-    main()
+5. Validators (validators.py)
+
+Example: taps_have_prints
+Ensures each tap has a corresponding print (same user_id, value_prop_id, date).
+
+🧩 Data Flow
+ETL Flow (Bronze → Silver → Gold)
+
+``` mermaid
+flowchart LR
+  subgraph Bronze["Bronze (raw)"]
+    P[prints.jsonl] --> E1
+    T[taps.jsonl] --> E2
+    Y[pays.csv] --> E3
+  end
+
+  subgraph Silver["Silver (processed)"]
+    E1[PrintsExtractor] --> V1
+    E2[TapsExtractor] --> V2
+    E3[PaymentsExtractor] --> V3
+  end
+
+  subgraph Gold["Gold (final ML dataset)"]
+    V1 --> F
+    V2 --> F
+    V3 --> F
+    F[Feature Engine / Aggregator (TBD)]
+  end
+```
+
+Extraction Workflow
+
+``` mermaid
+[Raw file] → [Loader (chunk)] → [Normalize] → [Pydantic row validate]
+           → [Pandera DF validate] → [Processed chunk] → [Yield / Write]
+```
+
+⚙️ Usage (so far)
+Configure
+
+Edit config/params.yaml:
+
+``` yaml
+processing:
+  chunk_size: 10000
+  target_window_days: 7
+  lookback_window_days: 21
+validation:
+  business_rules:
+    min_timestamp_days_ago: 1825
+
+```
+Run Extraction
+
+Example (inside scripts/ or notebook):
+
+``` python
+from src.data.extractors import PrintsExtractor
+from carrusel_mp.config import get_config
+
+cfg = get_config()
+prints_path = cfg.data_paths.raw + "/prints.json"
+
+ext = PrintsExtractor(prints_path)
+for chunk in ext.extract_chunked():
+    print(chunk.head())
+
 ```
 
 
-You should see canonical columns:
-
-prints/taps: timestamp | user_id | value_prop_id | position
-
-payments: timestamp | user_id | value_prop_id | amount
-
-Manifests: data/processed/_manifests/
-Rejects: data/processed/_rejects/
-
-(Workflow diagram (current scope)
-
-          +-------------------+
-          |  params.yaml      |
-          +---------+---------+
-                    |
-                    v
-      +-------------+-------------+
-      |  Config (single source)   |
-      |  src/mp_carousel/config   |
-      +------+------+-------------+
-             |      |
-             |      v
-             |  Logging setup (setup_logging)
-             |  src/mp_carousel/logging_config.py
-             |
-             v
-  +----------+------------------------------+
-  |          Data Extractors (ABC)          |
-  |  src/mp_carousel/data/extractors.py     |
-  |                                         |
-  |  _reader()         _normalize_chunk()   |
-  |    |                      |             |
-  |    v                      v             |
-  |  chunk df  ---> canonical dicts         |
-  |         Pydantic (row)  Pandera (df)    |
-  |                |            |           |
-  |                v            v           |
-  |            valid df -----> yield        |
-  +----------------+------------------------+
-                   |
-                   v
-        manifests + rejects written
-        data/processed/_manifests/
-        data/processed/_rejects/)
-
-
-Design choices & rationale
-
-Template Method + Strategy in extractors: consistent orchestration, flexible normalization.
-
-Schema-driven development: Pydantic/Pandera keep us honest; contracts evolve in one place.
-
-Config-driven policy: time bounds and thresholds don’t require code changes.
-
-Iterator-based chunking: predictable memory usage and good performance.
