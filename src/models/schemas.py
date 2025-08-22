@@ -61,7 +61,7 @@ class PrintRecord(BaseRecord):
 #================================================================================
 
 class TapRecord(PrintRecord):
-    """Same shape as PrintRecord (we keep position if present)."""
+    """Same shape as PrintRecord (keep position if present)."""
     pass
 
 #================================================================================

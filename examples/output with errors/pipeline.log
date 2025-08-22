@@ -1,0 +1,16 @@
+2025-08-20 18:35:44 | mp_carousel | INFO | <module>:37 | 🚀 start: extraction
+2025-08-20 18:35:44 | mp_carousel | INFO | <module>:38 | prints extractor started: rows=3, rejected=0, chunks=1
+2025-08-20 18:35:44 | mp_carousel | INFO | <module>:39 | taps extractor started: rows=2, rejected=0, chunks=1
+2025-08-20 18:35:44 | mp_carousel | INFO | <module>:40 | payments extractor started: rows=2, rejected=0, chunks=1
+2025-08-20 18:35:44 | mp_carousel | INFO | <module>:41 | ✅ done: extraction (duration=0.20s)
+2025-08-20 18:35:44 | mp_carousel | INFO | <module>:43 | 🚀 start: preprocessing
+2025-08-20 18:35:44 | mp_carousel | INFO | <module>:44 | processed prints: rows=3, cols=4, dup_rate=0.0
+2025-08-20 18:35:44 | mp_carousel | INFO | <module>:45 | processed taps: rows=2, cols=4, dup_rate=0.0
+2025-08-20 18:35:44 | mp_carousel | INFO | <module>:46 | processed payments: rows=2, cols=4, dup_rate=0.0
+2025-08-20 18:35:44 | mp_carousel | INFO | <module>:47 | ✅ done: preprocessing (duration=0.10s)
+2025-08-20 18:35:44 | mp_carousel | INFO | <module>:49 | 🚀 start: feature_engineering
+2025-08-20 18:35:44 | mp_carousel | INFO | <module>:50 | built final dataset: 5 rows, features=[clicked, prints_count_3w,...]
+2025-08-20 18:35:44 | mp_carousel | INFO | <module>:51 | ✅ done: feature_engineering (duration=0.05s)
+2025-08-20 18:35:44 | mp_carousel | INFO | <module>:53 | 🚀 start: quality_check
+2025-08-20 18:35:44 | mp_carousel | INFO | <module>:54 | null rates all < 0.01, dup_rate=0.0, quality_score=1.0
+2025-08-20 18:35:44 | mp_carousel | INFO | <module>:55 | ✅ done: quality_check (duration=0.03s)

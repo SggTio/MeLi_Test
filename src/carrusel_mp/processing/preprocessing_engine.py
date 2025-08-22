@@ -76,7 +76,6 @@ class PreprocessingEngine:
 
         df = self._attach_metadata(df, source_file)
 
-        # taps do not yet have a strict "processed" schema; validate against raw canonical
         DataFrameContracts.validate_dataframe(df[["timestamp", "user_id", "value_prop_id", "position"]], "taps_raw")
         self.logger.info(f"[taps] processed rows={len(df)} (deduped)")
         return df
@@ -98,7 +97,6 @@ class PreprocessingEngine:
 
         df = self._attach_metadata(df, source_file)
 
-        # payments do not yet have a strict "processed" schema; validate against raw canonical
         DataFrameContracts.validate_dataframe(df[["timestamp", "user_id", "value_prop_id", "amount"]], "payments_raw")
         self.logger.info(f"[payments] processed rows={len(df)} (deduped)")
         return df

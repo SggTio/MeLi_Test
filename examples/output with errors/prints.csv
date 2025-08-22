@@ -1,0 +1,2 @@
+day,user_id,event_data,_error
+2020-11-40,abc,"{'position': -1, 'value_prop': ''}","ValidationError: invalid date, blank value_prop, negative position"

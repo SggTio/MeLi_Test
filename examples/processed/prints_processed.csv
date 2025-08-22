@@ -1,0 +1,3 @@
+timestamp,user_id,value_prop_id,position,processed_at,source_file,row_number,duplicate_flag,data_quality_score
+2020-11-01T00:00:00Z,98702,cellphone_recharge,0,2025-08-22 18:21:10.992691,prints.json,0,False,1.0
+2020-11-01T00:00:00Z,98702,prepaid,1,2025-08-22 18:21:10.992697,prints.json,1,False,1.0

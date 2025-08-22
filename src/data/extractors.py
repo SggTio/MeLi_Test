@@ -139,7 +139,7 @@ class DataExtractor(Generic[T], ABC):
             self.metrics["chunks"] += 1
             self.metrics["rows_read"] += int(len(df_raw))
 
-            # Normalize to canonical fields
+            
             normalized: List[Dict[str, Any]] = self._normalize_chunk(df_raw)
 
             ok, bad = [], []
@@ -164,7 +164,7 @@ class DataExtractor(Generic[T], ABC):
 
             yield df_ok
 
-        # end-of-stream checks
+        
         self.metrics["ended_at"] = datetime.now(timezone.utc).isoformat()
         total = max(1, self.metrics["rows_read"])
         reject_rate = self.metrics["rows_rejected"] / total
@@ -212,7 +212,7 @@ class PrintsExtractor(DataExtractor[PrintRecord]):
         out: List[Dict[str, Any]] = []
         if df.empty:
             return out
-        # guard nested columns
+        
         ev = df["event_data"].apply(lambda x: x if isinstance(x, dict) else {})
         pos = ev.apply(lambda d: d.get("position"))
         vp  = ev.apply(lambda d: d.get("value_prop"))

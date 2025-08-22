@@ -1,0 +1,25 @@
+2025-08-20 14:02:11 | carrusel_mp.bootstrap | INFO  | setup_logging:92 | Logging initialized
+2025-08-20 14:02:11 | carrusel_mp.progress.extract | INFO | __init__:41 | 🚀 start: extract
+2025-08-20 14:02:11 | carrusel_mp.extractor.prints | INFO | extract_chunked:112 | start extracting prints from data/raw/prints.json
+2025-08-20 14:02:11 | carrusel_mp.extractor.prints | INFO | extract_chunked:131 | validated=3, rejected=0, chunks=1
+2025-08-20 14:02:11 | carrusel_mp.extractor.taps   | INFO | extract_chunked:112 | start extracting taps from data/raw/taps.json
+2025-08-20 14:02:11 | carrusel_mp.extractor.taps   | INFO | extract_chunked:131 | validated=2, rejected=0, chunks=1
+2025-08-20 14:02:11 | carrusel_mp.extractor.payments | INFO | extract_chunked:112 | start extracting payments from data/raw/pays.csv
+2025-08-20 14:02:11 | carrusel_mp.extractor.payments | INFO | extract_chunked:131 | validated=2, rejected=0, chunks=1
+2025-08-20 14:02:11 | carrusel_mp.progress.extract | INFO | update:54 | 📈 [3/3] (100.0%) finished extraction
+2025-08-20 14:02:11 | carrusel_mp.progress.extract | INFO | finish:63 | ✅ done: extract (duration: 0.21s)
+
+2025-08-20 14:02:11 | carrusel_mp.progress.preprocessing | INFO | 🚀 start: preprocessing
+2025-08-20 14:02:11 | carrusel_mp.preprocessing.engine | INFO | process_prints:89 | rows=3, cols=4, dup_rate=0.0
+2025-08-20 14:02:11 | carrusel_mp.preprocessing.engine | INFO | process_taps:95 | rows=2, cols=4, dup_rate=0.0
+2025-08-20 14:02:11 | carrusel_mp.preprocessing.engine | INFO | process_payments:101 | rows=2, cols=4, dup_rate=0.0
+2025-08-20 14:02:11 | carrusel_mp.progress.preprocessing | INFO | ✅ done: preprocessing (duration: 0.08s)
+
+2025-08-20 14:02:11 | carrusel_mp.progress.features | INFO | 🚀 start: feature_engineering
+2025-08-20 14:02:11 | carrusel_mp.features.builder | INFO | build:77 | built 5 feature rows
+2025-08-20 14:02:11 | carrusel_mp.progress.features | INFO | ✅ done: feature_engineering (duration: 0.05s)
+
+2025-08-20 14:02:11 | carrusel_mp.progress.quality | INFO | 🚀 start: quality_check
+2025-08-20 14:02:11 | carrusel_mp.quality.checker | INFO | evaluate:54 | prints null_rate=0.0, taps null_rate=0.0, payments null_rate=0.0
+2025-08-20 14:02:11 | carrusel_mp.quality.checker | INFO | evaluate:57 | final dup_rate=0.0, quality_score=1.00
+2025-08-20 14:02:11 | carrusel_mp.progress.quality | INFO | ✅ done: quality_check (duration: 0.02s)

@@ -1,0 +1,4 @@
+day,user_id,event_data
+2020-11-01,98702,"{'position': 0, 'value_prop': 'cellphone_recharge'}"
+2020-11-01,98702,"{'position': 1, 'value_prop': 'prepaid'}"
+2020-11-01,63252,"{'position': 0, 'value_prop': 'prepaid'}"

@@ -7,6 +7,7 @@ Pandera DataFrame schemas for data validation
 from __future__ import annotations
 import pandas as pd
 import pandera as pa
+from typing import Dict
 from pandera import Column, Check, DataFrameSchema
 from src.carrusel_mp.config import get_config
 

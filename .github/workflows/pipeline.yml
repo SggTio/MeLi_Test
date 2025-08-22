@@ -1,0 +1,46 @@
+name: ml-pipeline
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements/base.txt
+
+      - name: Prepare example data
+        run: |
+          mkdir -p data/raw
+          cp -r examples/input/* data/raw/
+          ls -la data/raw
+
+      - name: Run pipeline
+        env:
+          MP_LOG_DIR: logs
+          MP_VALIDATE_SCHEMA: "true"
+        run: |
+          python scripts/run_pipeline.py
+
+      - name: Upload outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-artifacts
+          path: |
+            data/processed/**
+            data/output/**
+            data/quality_reports/**
+            logs/**

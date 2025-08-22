@@ -1,0 +1,2 @@
+timestamp,user_id,value_prop_id,amount,processed_at,source_file,row_number,duplicate_flag,data_quality_score
+2020-11-01T00:00:00Z,79066,cellphone_recharge,37.36,2025-08-22 18:21:10.995139,pays.csv,0,False,1.0
