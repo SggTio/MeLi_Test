@@ -169,7 +169,7 @@ payments: timestamp | user_id | value_prop_id | amount
 Manifests: data/processed/_manifests/
 Rejects: data/processed/_rejects/
 
-Workflow diagram (current scope)
+(Workflow diagram (current scope)
 
           +-------------------+
           |  params.yaml      |
@@ -203,7 +203,7 @@ Workflow diagram (current scope)
                    v
         manifests + rejects written
         data/processed/_manifests/
-        data/processed/_rejects/
+        data/processed/_rejects/)
 
 
 Design choices & rationale

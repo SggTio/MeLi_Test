@@ -27,7 +27,7 @@ from src.models.schemas import (
     BatchProcessingResult,
 )
 from src.models.contracts import validate_dataframe
-from mp_carousel.utils.time_utils import parse_day_date, ensure_datetime_utc
+from src.utils.time_utils import parse_day_date, ensure_datetime_utc
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -37,6 +37,15 @@ class DataExtractionError(Exception):
     """excepciones para errores de extracción"""
     pass
 
+
+def _ensure_parent(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _append_quarantine(rows: List[Dict[str, Any]], path: Path) -> None:
+        if not rows:
+            return
+        _ensure_parent(path)
+        pd.DataFrame(rows).to_csv(path, mode="a", index=False, header=not path.exists())
 #================================================================================
 
 class MemoryManager:
@@ -88,12 +97,16 @@ class DataExtractor(ABC):
     - track de la linea de datos
     """
     
-    def __init__(self, 
-                 file_path: Union[str, Path],
-                 chunk_size: Optional[int] = None,
-                 max_memory_mb: float = 1024,
-                 encoding: str = 'utf-8',
-                 validate_schema: bool = True):
+    def __init__(
+        self,
+        file_path: str | Path,
+        model: Type[T],
+        schema_name: str,
+        source_name: str,
+        chunksize: Optional[int] = None,
+        max_reject_rate: float = 0.02,
+        encoding: str = "utf-8",
+    ) -> None:
         """
         Inicializar extraccion
         
@@ -104,60 +117,91 @@ class DataExtractor(ABC):
             encoding: File encoding
             validate_schema:revisar si se usa pandera
         """
+        self.cfg = get_config()
         self.file_path = Path(file_path)
+        self.model = model
+        self.schema_name = schema_name
+        self.source_name = source_name
+        self.chunksize = chunksize or self.cfg.processing.chunk_size
+        self.max_reject_rate = max_reject_rate
         self.encoding = encoding
-        self.validate_schema = validate_schema
-        self.max_memory_mb = max_memory_mb
         
         # logging
-        self.logger = logging.getLogger(f"{self.__class__.__name__}")
-        
-        # validar si archivo existe
         if not self.file_path.exists():
-            raise FileNotFoundError(f"Archivo de datos no encontrado: {self.file_path}")
-        
-        # calcular tamaño del chunk si no fue dado
-        if chunk_size is None:
-            file_size_mb = self.file_path.stat().st_size / 1024 / 1024
-            self.chunk_size = MemoryManager.estimate_chunk_size(file_size_mb, max_memory_mb)
-            self.logger.info(f"Auto calculado el chunk: {self.chunk_size} (tamaño archivo: {file_size_mb:.2f} MB)")
-        else:
-            self.chunk_size = chunk_size
-        
-        # Preprocesamiento y metadata
-        self.processing_metadata = {
-            'start_time': None,
-            'end_time': None,
-            'total_records': 0,
-            'valid_records': 0,
-            'invalid_records': 0,
-            'errors': [],
-            'file_path': str(self.file_path),
-            'extractor_class': self.__class__.__name__
+            raise FileNotFoundError(f"data file not found: {self.file_path}")
+
+        self.logger = logging.getLogger(f"mp_carousel.extractor.{self.source_name}")
+        self.rejects_path = Path(self.cfg.data_paths.processed) / "_rejects" / f"{self.source_name}.csv"
+        self.manifest_path = Path(self.cfg.data_paths.processed) / "_manifests" / f"{self.source_name}.json"
+
+        self.metrics = {
+            "rows_read": 0,
+            "rows_valid": 0,
+            "rows_rejected": 0,
+            "chunks": 0,
+            "started_at": datetime.now(timezone.utc).isoformat(),
         }
-        
-        self.logger.info(f"Initialized {self.__class__.__name__} for file: {self.file_path}")
 
     #--------------------------------------------------------------------------------
     
     @abstractmethod
-    def get_pydantic_model(self):
-        """retorna el modelo de pydantic"""
-        pass
+    def _reader(self) -> Iterator[pd.DataFrame]:
+        ...
 
     #--------------------------------------------------------------------------------
     
     @abstractmethod
-    def get_schema_name(self) -> str:
-        """Retorna el modelo de panderas"""
-        pass
+    def _normalize_chunk(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
+        ...
 
     #--------------------------------------------------------------------------------
     
-    @abstractmethod
-    def _read_raw_chunk(self, chunk_start: int, chunk_size: int) -> List[Dict[str, Any]]:
-        """lee el chunk crudo del archivo de datos"""
-        pass
+    def extract_chunked(self) -> Iterator[pd.DataFrame]:
+        self.logger.info(f"start extracting {self.source_name} from {self.file_path}")
+        for df_raw in self._reader():
+            self.metrics["chunks"] += 1
+            self.metrics["rows_read"] += int(len(df_raw))
+
+            # Normalize to canonical fields
+            normalized: List[Dict[str, Any]] = self._normalize_chunk(df_raw)
+
+            ok, bad = [], []
+            for rec in normalized:
+                try:
+                    v = self.model.model_validate(rec)
+                    ok.append(v.model_dump())
+                except ValidationError as e:
+                    rec["_error"] = str(e)
+                    bad.append(rec)
+
+            if bad:
+                _append_quarantine(bad, self.rejects_path)
+
+            df_ok = pd.DataFrame(ok)
+            if not df_ok.empty:
+                # Pandera validation on RAW canonical schema
+                validate_dataframe(df_ok, self.schema_name)
+
+            self.metrics["rows_valid"] += int(len(df_ok))
+            self.metrics["rows_rejected"] += int(len(bad))
+
+            yield df_ok
+
+        # end-of-stream checks
+        self.metrics["ended_at"] = datetime.now(timezone.utc).isoformat()
+        total = max(1, self.metrics["rows_read"])
+        reject_rate = self.metrics["rows_rejected"] / total
+
+        _ensure_parent(self.manifest_path)
+        with open(self.manifest_path, "w", encoding="utf-8") as f:
+            json.dump(self.metrics, f, indent=2)
+
+        if reject_rate > self.max_reject_rate:
+            raise DataExtractionError(
+                f"[{self.source_name}] reject_rate={reject_rate:.2%} > {self.max_reject_rate:.2%} "
+                f"(read={self.metrics['rows_read']}, rejected={self.metrics['rows_rejected']})"
+            )
+
 
     #--------------------------------------------------------------------------------
     
@@ -348,252 +392,114 @@ class DataExtractor(ABC):
     #--------------------------------------------------------------------------------
     
     def extract_all(self) -> pd.DataFrame:
-        """
-        Extract all data at once (use with caution for large files)
-        
-        Returns:
-            Complete pandas DataFrame with all validated data
-        """
-        self.logger.info("Starting full extraction (not recommended for large files)")
-        
-        all_chunks = []
-        for chunk_df in self.extract_chunked():
-            all_chunks.append(chunk_df)
-        
-        if not all_chunks:
-            self.logger.warning("No valid data extracted")
-            return pd.DataFrame()
-        
-        # Combine all chunks
-        combined_df = pd.concat(all_chunks, ignore_index=True)
-        
-        self.logger.info(f"Full extraction complete. Total records: {len(combined_df)}")
-        return combined_df
-    
-    def _log_processing_summary(self):
-        """Log processing summary"""
-        metadata = self.processing_metadata
-        
-        if metadata['start_time'] and metadata['end_time']:
-            duration = (metadata['end_time'] - metadata['start_time']).total_seconds()
-        else:
-            duration = 0
-        
-        self.logger.info("=" * 60)
-        self.logger.info(f"EXTRACTION SUMMARY for {self.__class__.__name__}")
-        self.logger.info("=" * 60)
-        self.logger.info(f"File: {metadata['file_path']}")
-        self.logger.info(f"Total records processed: {metadata['total_records']}")
-        self.logger.info(f"Valid records: {metadata['valid_records']}")
-        self.logger.info(f"Invalid records: {metadata['invalid_records']}")
-        self.logger.info(f"Processing duration: {duration:.2f} seconds")
-        
-        if metadata['total_records'] > 0:
-            validity_rate = metadata['valid_records'] / metadata['total_records'] * 100
-            self.logger.info(f"Data validity rate: {validity_rate:.2f}%")
-        
-        if metadata['errors']:
-            self.logger.warning(f"Total errors encountered: {len(metadata['errors'])}")
-            
-        self.logger.info("=" * 60)
+        chunks = list(self.extract_chunked())
+        return pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
 
-    #--------------------------------------------------------------------------------
-    
-    def get_processing_result(self) -> BatchProcessingResult:
-        """Get processing result as Pydantic model"""
-        metadata = self.processing_metadata
-        
-        if metadata['start_time'] and metadata['end_time']:
-            duration = (metadata['end_time'] - metadata['start_time']).total_seconds()
-        else:
-            duration = 0
-        
-        # Calculate data quality score
-        if metadata['total_records'] > 0:
-            data_quality_score = metadata['valid_records'] / metadata['total_records']
-        else:
-            data_quality_score = 0.0
-        
-        return BatchProcessingResult(
-            records_processed=metadata['total_records'],
-            records_valid=metadata['valid_records'],
-            records_invalid=metadata['invalid_records'],
-            processing_time_seconds=duration,
-            data_quality_score=data_quality_score,
-            errors=[str(error) for error in metadata['errors'][:10]]  # Limit to first 10 errors
-        )
 
 #================================================================================
 
-class PrintsExtractor(DataExtractor):
+class PrintsExtractor(DataExtractor[PrintRecord]):
     """Extractor for prints data (JSON Lines format)"""
-    
-    def get_pydantic_model(self):
-        return PrintRecord
-    
-    #--------------------------------------------------------------------------------
-    
-    def get_schema_name(self) -> str:
-        return "prints"
+    def __init__(self, file_path: str | Path, **kw: Any) -> None:
+        super().__init__(file_path, PrintRecord, "prints_raw", "prints", **kw)
     
     #--------------------------------------------------------------------------------
     
-    def _read_raw_chunk(self, chunk_start: int, chunk_size: int) -> List[Dict[str, Any]]:
-        """Read chunk from JSON Lines file"""
-        records = []
-        current_line = 0
-        
-        try:
-            with open(self.file_path, 'r', encoding=self.encoding) as file:
-                for line in file:
-                    if current_line < chunk_start:
-                        current_line += 1
-                        continue
-                    
-                    if len(records) >= chunk_size:
-                        break
-                    
-                    try:
-                        record = json.loads(line.strip())
-                        records.append(record)
-                    except json.JSONDecodeError as e:
-                        self.logger.warning(f"Invalid JSON at line {current_line + 1}: {e}")
-                        self.processing_metadata['errors'].append({
-                            'line_number': current_line + 1,
-                            'error': f"JSON decode error: {str(e)}",
-                            'raw_line': line.strip()[:100]  # First 100 chars for debugging
-                        })
-                    
-                    current_line += 1
-        
-        except Exception as e:
-            raise DataExtractionError(f"Error reading prints file: {str(e)}")
-        
-        return records
+    def _reader(self) -> Iterator[pd.DataFrame]:
+        yield from jsonl_chunks(self.file_path, self.chunksize)
+    
+    #--------------------------------------------------------------------------------
+    
+    def _normalize_chunk(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
+        # raw: {"day":"YYYY-MM-DD", "event_data":{"position":int,"value_prop":str},"user_id":int}
+        out: List[Dict[str, Any]] = []
+        if df.empty:
+            return out
+        # guard nested columns
+        ev = df["event_data"].apply(lambda x: x if isinstance(x, dict) else {})
+        pos = ev.apply(lambda d: d.get("position"))
+        vp  = ev.apply(lambda d: d.get("value_prop"))
+        ts  = df["day"].apply(lambda s: parse_day_date(str(s)))
+
+        for user, vpid, position, ts_ in zip(df["user_id"], vp, pos, ts):
+            out.append({
+                "timestamp": ts_.to_pydatetime() if pd.notna(ts_) else None,
+                "user_id": str(user),
+                "value_prop_id": None if vpid is None else str(vpid),
+                "position": None if pd.isna(position) else int(position),
+            })
+        return out
 
 #================================================================================
 
-class TapsExtractor(DataExtractor):
+class TapsExtractor(DataExtractor[TapRecord]):
     """Extractor for taps data (JSON Lines format)"""
     
-    def get_pydantic_model(self):
-        return TapRecord
+    def __init__(self, file_path: str | Path, **kw: Any) -> None:
+        super().__init__(file_path, TapRecord, "taps_raw", "taps", **kw)
     
     #--------------------------------------------------------------------------------
     
-    def get_schema_name(self) -> str:
-        return "taps"
-    
+    def _reader(self) -> Iterator[pd.DataFrame]:
+        yield from jsonl_chunks(self.file_path, self.chunksize)
     #--------------------------------------------------------------------------------
     
-    def _read_raw_chunk(self, chunk_start: int, chunk_size: int) -> List[Dict[str, Any]]:
-        """Read chunk from JSON Lines file"""
-        records = []
-        current_line = 0
-        
-        try:
-            with open(self.file_path, 'r', encoding=self.encoding) as file:
-                for line in file:
-                    if current_line < chunk_start:
-                        current_line += 1
-                        continue
-                    
-                    if len(records) >= chunk_size:
-                        break
-                    
-                    try:
-                        record = json.loads(line.strip())
-                        records.append(record)
-                    except json.JSONDecodeError as e:
-                        self.logger.warning(f"Invalid JSON at line {current_line + 1}: {e}")
-                        self.processing_metadata['errors'].append({
-                            'line_number': current_line + 1,
-                            'error': f"JSON decode error: {str(e)}",
-                            'raw_line': line.strip()[:100]
-                        })
-                    
-                    current_line += 1
-        
-        except Exception as e:
-            raise DataExtractionError(f"Error reading taps file: {str(e)}")
-        
-        return records
+  def _normalize_chunk(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        if df.empty:
+            return out
+        ev = df["event_data"].apply(lambda x: x if isinstance(x, dict) else {})
+        pos = ev.apply(lambda d: d.get("position"))
+        vp  = ev.apply(lambda d: d.get("value_prop"))
+        ts  = df["day"].apply(lambda s: parse_day_date(str(s)))
+
+        for user, vpid, position, ts_ in zip(df["user_id"], vp, pos, ts):
+            out.append({
+                "timestamp": ts_.to_pydatetime() if pd.notna(ts_) else None,
+                "user_id": str(user),
+                "value_prop_id": None if vpid is None else str(vpid),
+                "position": None if pd.isna(position) else int(position),
+            })
+        return out
 
 #================================================================================
 
-class PaymentsExtractor(DataExtractor):
-    """Extractor for payments data (CSV format)"""
-    
-    def get_pydantic_model(self):
-        return PaymentRecord
+class PaymentsExtractor(DataExtractor[PaymentRecord]):
+    def __init__(self, file_path: str | Path, **kw: Any) -> None:
+        super().__init__(file_path, PaymentRecord, "payments_raw", "payments", **kw)
     
     #--------------------------------------------------------------------------------
     
-    def get_schema_name(self) -> str:
-        return "payments"
+    def _reader(self) -> Iterator[pd.DataFrame]:
+        yield from csv_chunks(self.file_path, self.chunksize, encoding=self.encoding)
     
     #--------------------------------------------------------------------------------
     
-    def _read_raw_chunk(self, chunk_start: int, chunk_size: int) -> List[Dict[str, Any]]:
-        """Read chunk from CSV file"""
-        try:
-            # Read CSV chunk using pandas
-            df_chunk = pd.read_csv(
-                self.file_path,
-                encoding=self.encoding,
-                skiprows=chunk_start if chunk_start > 0 else 0,
-                nrows=chunk_size,
-                dtype=str  # Read as string first, then validate
-            )
-            
-            if df_chunk.empty:
-                return []
-            
-            # Convert to list of dictionaries
-            records = df_chunk.to_dict('records')
-            
-            # Convert numeric fields
-            for record in records:
-                if 'amount' in record and record['amount'] is not None:
-                    try:
-                        record['amount'] = float(record['amount'])
-                    except (ValueError, TypeError):
-                        self.logger.warning(f"Invalid amount value: {record['amount']}")
-                        record['amount'] = None
-            
-            return records
-        
-        except Exception as e:
-            raise DataExtractionError(f"Error reading payments file: {str(e)}")
+    def _normalize_chunk(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
+        # raw CSV cols: pay_date,total,user_id,value_prop
+        out: List[Dict[str, Any]] = []
+        if df.empty:
+            return out
+        # ensure columns exist
+        for _, row in df.iterrows():
+            pay_date = row.get("pay_date")
+            total = row.get("total")
+            user_id = row.get("user_id")
+            vp = row.get("value_prop")
 
+            ts = parse_day_date(str(pay_date))  # 'YYYY-MM-DD' -> UTC midnight
+            amt = None
+            try:
+                amt = float(total) if total is not None and str(total) != "" else None
+            except Exception:
+                amt = None
 
-#================================================================================
-
-# Factory function for creating extractors
-def create_extractor(file_path: Union[str, Path], 
-                    data_type: str,
-                    **kwargs) -> DataExtractor:
-    """
-    Factory function to create appropriate extractor based on data type
-    
-    Args:
-        file_path: Path to the data file
-        data_type: Type of data ('prints', 'taps', 'payments')
-        **kwargs: Additional arguments for extractor initialization
-        
-    Returns:
-        Appropriate DataExtractor instance
-    """
-    extractors = {
-        'prints': PrintsExtractor,
-        'taps': TapsExtractor,
-        'payments': PaymentsExtractor
-    }
-    
-    if data_type not in extractors:
-        raise ValueError(f"Unknown data type: {data_type}. "
-                        f"Available types: {list(extractors.keys())}")
-    
-    return extractors[data_type](file_path, **kwargs)
+            out.append({
+                "timestamp": ts.to_pydatetime() if pd.notna(ts) else None,
+                "user_id": str(user_id),
+                "value_prop_id": None if vp is None else str(vp),
+                "amount": amt,
+            })
+        return out
 
 #================================================================================
