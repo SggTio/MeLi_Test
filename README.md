@@ -112,33 +112,36 @@ Ensures each tap has a corresponding print (same user_id, value_prop_id, date).
 🧩 Data Flow
 ETL Flow (Bronze → Silver → Gold)
 
-``` mermaid
-flowchart LR
-  subgraph Bronze["Bronze (raw)"]
-    P[prints.jsonl] --> E1
-    T[taps.jsonl] --> E2
-    Y[pays.csv] --> E3
-  end
+``` text
+┌───────────────┐     ┌──────────────────┐     ┌─────────────────────────┐
+│  prints.jsonl │───► │ PrintsExtractor  │
+├───────────────┤     ├──────────────────┤
+│   taps.jsonl  │───► │ TapsExtractor    │───► │ Feature Engine /        │───► Final dataset
+├───────────────┤     ├──────────────────┤     │ Aggregator (TBD)        │
+│   pays.csv    │───► │ PaymentsExtractor│     └─────────────────────────┘
+└───────────────┘     └──────────────────┘
 
-  subgraph Silver["Silver (processed)"]
-    E1[PrintsExtractor] --> V1
-    E2[TapsExtractor] --> V2
-    E3[PaymentsExtractor] --> V3
-  end
-
-  subgraph Gold["Gold (final ML dataset)"]
-    V1 --> F
-    V2 --> F
-    V3 --> F
-    F[Feature Engine / Aggregator (TBD)]
-  end
 ```
 
 Extraction Workflow
 
-``` mermaid
-[Raw file] → [Loader (chunk)] → [Normalize] → [Pydantic row validate]
-           → [Pandera DF validate] → [Processed chunk] → [Yield / Write]
+``` text[Raw file]
+   │
+   ▼
+[Loader (chunk)]
+   │
+   ▼
+[Normalize]
+   │
+   ▼
+[Pydantic row validate]
+   │
+   ▼
+[Pandera DF validate]
+   │
+   ▼
+[Processed chunk] → [Yield / Write]
+
 ```
 
 ⚙️ Usage (so far)
